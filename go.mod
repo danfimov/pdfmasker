@@ -3,7 +3,7 @@ module github.com/danfimov/pdfmasker
 go 1.25.0
 
 require (
-	github.com/benoitkugler/pdf v0.0.14
+	github.com/benoitkugler/pdf v0.0.15
 	github.com/benoitkugler/pstokenizer v1.0.1
 	github.com/pdfcpu/pdfcpu v0.14.0
 	github.com/stretchr/testify v1.11.1
