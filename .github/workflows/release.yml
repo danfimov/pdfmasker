@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+
+jobs:
+  pypi:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+    permissions:
+      contents: read
+      id-token: write  # trusted publishing to PyPI
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false  # release job: avoid cache poisoning of published artifacts
+      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+        with:
+          enable-cache: false
+          version: "latest"
+          python-version: "3.12"
+
+      - name: Set version from tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sed -i "s/^__version__ = .*/__version__ = \"${version}\"/" src/pdfmasker/__init__.py
+          echo "Building pdfmasker ${version}"
+
+      - name: Build sdist and platform wheels
+        run: |
+          set -euxo pipefail
+          uv build --sdist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            # Clean the binary dir first: the wheel's `_bin/*` artifact glob would
+            # otherwise fold a previous platform's binary into this wheel.
+            rm -rf src/pdfmasker/_bin
+            GOOS="${target%/*}" GOARCH="${target#*/}" uv build --wheel
+          done
+          ls -l dist
+
+      - name: Publish
+        run: uv publish --trusted-publishing always
