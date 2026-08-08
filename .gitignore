@@ -27,6 +27,20 @@ go.work.sum
 # env file
 .env
 
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Built Go binary bundled into the wheel (produced by hatch_build.py)
+src/pdfmasker/_bin/
+
 # Editor/IDE
 # .idea/
 # .vscode/
