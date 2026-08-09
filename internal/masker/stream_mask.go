@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"unicode"
 )
 
 // DefaultMaskChar is used to build the mask when no explicit replacement value is provided.
@@ -68,37 +67,6 @@ func MaskStream(req StreamMaskRequest) (StreamMaskResult, error) {
 	result.Reader = reader
 	result.Applied = applied
 	return result, nil
-}
-
-// generateCaseVariations returns case variations of a string:
-// - original (as-is)
-// - lowercase
-// - UPPERCASE
-// - Capitalized (first letter upper, rest lower)
-func generateCaseVariations(s string) []string {
-	variations := make(map[string]struct{})
-
-	// Original
-	variations[s] = struct{}{}
-
-	// Lowercase
-	variations[strings.ToLower(s)] = struct{}{}
-
-	// Uppercase
-	variations[strings.ToUpper(s)] = struct{}{}
-
-	// Capitalized (Title Case for first letter only)
-	if len(s) > 0 {
-		runes := []rune(s)
-		capitalized := string(unicode.ToUpper(runes[0])) + strings.ToLower(string(runes[1:]))
-		variations[capitalized] = struct{}{}
-	}
-
-	result := make([]string, 0, len(variations))
-	for v := range variations {
-		result = append(result, v)
-	}
-	return result
 }
 
 func (req StreamMaskRequest) validate() error {

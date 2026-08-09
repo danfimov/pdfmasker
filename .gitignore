@@ -44,3 +44,6 @@ src/pdfmasker/_bin/
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# OS junk
+.DS_Store

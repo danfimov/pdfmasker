@@ -54,30 +54,79 @@ The single request flows through these layers, each in its own file:
 
 - **Hybrid path** (`MaskStreamHybrid`, `hybrid_writer.go`) — PDF 1.5+ with object streams (real ADP/Workday paystubs).
   Uses pdfcpu to extract font ToUnicode CMaps but `benoitkugler/pdf` to parse and *rewrite* the document, because pdfcpu
-  does not round-trip object/xref streams safely. Matches strings **exactly**, so targets are first expanded into case
-  variations (`generateCaseVariations`) and the per-variation counts are folded back onto the original targets after the
-  run.
-- **Fallback path** (`replaceTextInContext`, `text_replace.go`) — simpler PDFs, edited in place with pdfcpu. Matches
-  **case-insensitively** via the Unicode simple-fold helpers in `fold.go`, so no case expansion is needed here.
+  does not round-trip object/xref streams safely.
+- **Fallback path** (`replaceTextInContext`, `text_replace.go`) — simpler PDFs, edited in place with pdfcpu.
 
-Both paths share the same low-level content-stream mechanics and both key their result counts by the original target
-string, so the caller sees one uniform `applied` map.
+Both engines share the **same content-stream masking core** (`maskOperations`, `content_ops.go`), match
+**case-insensitively** (`runeEqualFold` in `fold.go`, no case-variation expansion), and key their result counts by the
+original target string, so the caller sees one uniform `applied` map. The engines differ only in how they read/write the
+*document* (benoitkugler vs pdfcpu) and how they collect fonts.
+
+Matching is also **whitespace-flexible** (`matchFlexAt`): a space in a target matches either real whitespace or a
+boundary between two show-text operators (zero width). This is what lets a full-name target like `"HERMIONE GRANGER"`
+match text where the visual space between the words is a positioning jump between separate `TJ` operators rather than a
+space glyph. It deliberately does *not* match inside a single word (no boundary, no whitespace), so `"in come"` never
+matches `income`. Boundaries are per show-text operator, not per `TJ` array element, so intra-word kerning splits aren't
+treated as spaces.
+
+### Content-stream parsing (`benoitkugler/pdf/reader/parser.ParseContent`)
+
+Content streams are parsed into `[]contentstream.Operation` with `parser.ParseContent`, not the raw PostScript
+tokenizer. This is the crux of correct inline-image handling: `ParseContent` understands `BI ... ID <binary> EI` and
+skips the image's binary payload by its computed length, whereas the bare tokenizer (`pstokenizer`) deliberately halts at
+`ID`/`stream` (it can't know where binary ends), which silently dropped every operator — and thus all text — after the
+first inline image. `maskOperations` edits the ops and `contentstream.WriteOperations` serializes them back, inline
+images and all.
+
+This depends on a **local fork** of `benoitkugler/pdf` wired via a `replace` directive in `go.mod` (see "Fork
+dependency" below): upstream `v0.0.15` errors on `/IM true` inline image masks (no color space) and adds a stray byte
+around inline data that breaks the parse→serialize→parse round-trip.
 
 ### Content-stream editing invariants
 
-When touching the token-rewriting code (`processTokensHybrid`, `applyReplacement*`, `replaceAcrossTokensInPlace`),
-preserve these or you will corrupt PDFs:
+When touching `maskOperations` / `content_ops.go`, preserve these or you will corrupt PDFs:
 
 - **CID vs simple fonts.** CID (Type0) fonts encode text as 2-byte slots via a ToUnicode CMap; simple fonts are 1 byte.
-  Decoding, matching, and re-encoding all branch on `isCIDFont`. Unmapped CIDs are intentionally left untouched.
-- **Byte-slot preservation.** Replacements re-encode to the *same slot/byte count* as the original token
-  (`encode*WithSlots`), padding/truncating with a fallback glyph, so the visual layout and downstream offsets stay
-  stable. The default mask is a run of `X` (`DefaultMaskChar`) sized to the target's rune length.
-- **Inline images** (`BI ... ID <binary> EI`) contain binary that breaks the PS tokenizer, so they're extracted to
-  placeholders before tokenizing and restored after (`extractInlineImages` / `restoreInlineImages`, hybrid path only).
-- Text may be split character-by-character across many `Tj`/`TJ` tokens; `applyReplacementWithReconstruction`
-  reassembles a segment's full text to find matches that span tokens, then redistributes the replacement back,
-  re-encoding only the tokens whose characters actually changed.
+  Decoding and re-encoding branch on `isCID` in `glyphFont`. A font with no ToUnicode is treated as raw bytes (UTF-16 BOM
+  aware). Unmapped CIDs / chunks that decode to nothing are intentionally left untouched.
+- **Byte-slot preservation.** Replacements re-encode to the *same byte count* as the original operand
+  (`encodeWithMappingSlots`), padding/truncating with a fallback glyph, so the visual layout and downstream offsets stay
+  stable. `TJ` kerning adjustments are preserved because the parser keeps them as `TextSpaced.SpaceSubtractedAfter`.
+- **Two masking modes, handled per chunk when writing back** (`replacement.maskChar`):
+  - *Default mask* (no `mask_with`): each matched rune is replaced in place by `X` (`DefaultMaskChar`), so every chunk
+    keeps its rune length and CID byte slots — layout is preserved and `encode` re-encodes with `preserveSlots=true`.
+  - *Custom mask* (`mask_with` set): the whole matched span is emitted as one unit into the chunk holding the match's
+    *start*, and the other chunks the match spans drop their matched text. This keeps a differently-sized, multi-word
+    replacement contiguous instead of being split across the original operators' positions — masking the two-operator
+    name `"HERMIONE GRANGER"` with `"MINERVA MCGONAGALL"`, the earlier char-for-char redistribution fragmented the
+    replacement across the two positions. When a chunk's length changes, `encode` uses `preserveSlots=false` so the text
+    is encoded at its natural length rather than truncated to the original byte count.
+- Text may be split character-by-character across many `Tj`/`TJ` operators; `maskOperations` reconstructs a *segment*
+  (a run of consecutive show-text ops under one font, bounded by font changes and `BT`/`ET`), matches against the full
+  reconstructed text, then redistributes the replacement back, re-encoding only the chunks whose characters changed.
+
+## Fork dependency (`benoitkugler/pdf`)
+
+`go.mod` requires `github.com/benoitkugler/pdf v0.0.15` but redirects it to a pinned fork commit:
+
+```
+replace github.com/benoitkugler/pdf => github.com/danfimov/pdf v0.0.0-20260809121144-9b479295d869
+```
+
+(fork repo: https://github.com/danfimov/pdf). The fork carries two fixes needed for inline-image content-stream
+parsing, both in the inline-image path:
+
+1. `contentstream.OpBeginImage.Metrics` returns `(1, 1, nil)` for `ImageMask` stencils instead of trying to resolve a
+   (nonexistent) color space — otherwise `ParseContent` errors with `missing color space` on `BI /IM true ... ID ... EI`.
+2. `reader/parser.parseImageData` reads the inline data as *exactly* the image bytes (skip the single separator space,
+   then `SkipBytes(n)`), instead of folding the space into `Image.Content`. That makes read symmetric with
+   `OpBeginImage.Add` (`"ID " + Content + "EI"`) so a stream survives parse→serialize→parse.
+
+Both fixes are reported upstream; once merged, bump to the release that includes them and drop the `replace`.
+
+**Rebuild caveat:** `uv run` does *not* recompile the Go binary when only Go sources or `go.mod` change (it reuses the
+cached build unless a Python source changes). After editing Go or the fork pin, run `uv run --reinstall pytest` (or set
+`PDFMASKER_BINARY` to a freshly `go build`-ed binary) so pytest exercises the new binary rather than a stale one.
 
 ## Packaging model
 
@@ -88,7 +137,18 @@ needs no libc, so the linux wheel is tagged manylinux2014 with no auditwheel ste
 
 ## Test fixtures
 
-`tests/fixtures/test_paystub.pdf` exercises the fallback path; `tests/fixtures/test_paystub_adp_hybrid.pdf` exercises
-the hybrid/object-stream path. They are shared by both suites — the Go tests in `internal/masker` load them via
-`../../tests/fixtures`. Any change to either engine should keep both the Go tests and `tests/test_mask.py` green, since
-together they are the only coverage of the language seam.
+All fixtures live in `tests/fixtures/paystubs/` (one directory, shared by both suites). Their PII has been replaced with
+fake Harry Potter names of matching length/form so layout is preserved — **fixtures must not contain real PII; scrub
+before adding.** The Go tests in `internal/masker` load them via `../../tests/fixtures/paystubs`; the Python suite loads
+them through `tests/conftest.py`, which globs `fixtures/paystubs/*.pdf` into `files_for_test` keyed by filename.
+
+The set spans both engines and all three producers, so keep both suites green when touching either engine:
+
+- **Fallback (non-object-stream) path:** `simple_paystub.pdf` (name `Lorraine Freddie` — the general-purpose fallback
+  fixture used by `characterization_test.go`, `stream_mask_test.go`, `bench_test.go`), `adp_paystub_neville_lestrange-weasley.pdf`
+  (+`_2`), `paychex_paystub_bill_weasley.pdf`, `paychex_paystub_narcissa_lockhart.pdf`.
+- **Hybrid (object-stream) path:** `adp_paystub_hermion_granger.pdf` (also the inline-image / cross-operator fixture for
+  `inline_image_test.go`; `HERMIONE`/`GRANGER` split across two TJ operators), `workday_paystub_luna_lovegood.pdf`,
+  `workday_paystub_redacted.pdf` (name already redacted — masked by phone number).
+
+`internal/masker/inline_image_test.go`'s `TestMaskStreamPaystubs` sweeps every fixture across both engines.

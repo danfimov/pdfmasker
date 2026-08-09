@@ -12,7 +12,7 @@ import (
 
 func loadFixture(b *testing.B) []byte {
 	b.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "test_paystub.pdf"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "paystubs", "simple_paystub.pdf"))
 	if err != nil {
 		b.Fatalf("read fixture: %v", err)
 	}
@@ -44,14 +44,13 @@ func BenchmarkMaskStream_SingleTarget(b *testing.B) {
 	benchMask(b, []string{"Lorraine Freddie"})
 }
 
-// Several targets — each expands to up to 4 case variations, so this exercises
-// the multi-pass scanning behaviour.
+// Several targets applied in one parse/mask/serialize pass over each content stream.
 func BenchmarkMaskStream_MultiTarget(b *testing.B) {
 	benchMask(b, []string{"Lorraine Freddie", "Lorraine", "Freddie", "123-45-6789", "Acme Corp"})
 }
 
 func benchMaskFile(b *testing.B, name string, targets []string) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", name))
+	data, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "paystubs", name))
 	if err != nil {
 		b.Fatalf("read fixture: %v", err)
 	}
@@ -73,10 +72,10 @@ func benchMaskFile(b *testing.B, name string, targets []string) {
 	}
 }
 
-// Real ADP paystub — routes through the hybrid (object-stream) path, which is the
+// ADP paystub — routes through the hybrid (object-stream) path, which is the
 // production flow for ADP/Workday. Patterns mirror the admin masking values.
 func BenchmarkMaskStream_HybridADP(b *testing.B) {
-	benchMaskFile(b, "test_paystub_adp_hybrid.pdf", []string{
-		"ANTWANE", "JEFFERSON-TOLBERT", "AMYX INC", "6605 SPRINGFORD TERRACE",
+	benchMaskFile(b, "adp_paystub_hermion_granger.pdf", []string{
+		"HERMIONE", "GRANGER", "SONNEN INC", "31 BENNETT FARM DRIVE",
 	})
 }
