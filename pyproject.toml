@@ -1,11 +1,36 @@
 [project]
 name = "pdfmasker"
-description = "Mask sensitive text in PDFs."
+description = "Python library for masking sensitive text in PDFs."
 readme = "README.md"
-requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Dima Anfimov", email = "lovesolaristics@gmail.com" }]
+requires-python = ">=3.10,<4"
 keywords = ["pdf", "masking", "redaction", "pii"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Multimedia :: Graphics",
+  "Topic :: Text Processing :: Filters",
+  "Typing :: Typed"
+]
 dynamic = ["version"]
 dependencies = []
+
+[project.urls]
+Documentation = "https://github.com/danfimov/pdfmasker"
+Repository = "https://github.com/danfimov/pdfmasker"
+Changelog = "https://github.com/danfimov/pdfmasker/releases"
 
 [project.optional-dependencies]
 pikepdf = [
@@ -28,6 +53,7 @@ build = [
 
 lint = [
     "ruff>=0.16.2",
+    "ty>=0.0.72",
     "zizmor>=1.29.0",
 ]
 test = [

@@ -63,13 +63,13 @@ class PikepdfTextLayerStrategy(MaskStrategy):
         counts = dict.fromkeys(cleaned_patterns, 0)
         any_changed = False
         try:
-            for kind, container, resources in iter_content_targets(pdf):
+            for container, resources in iter_content_targets(pdf):
                 fonts = collect_fonts(resources)
                 instructions, stream_counts, changed = process(container, fonts, replacements)
                 for pattern, count in stream_counts.items():
                     counts[pattern] += count
                 if changed:
-                    write_back(pdf, kind, container, instructions)
+                    write_back(pdf, container, instructions)
                     any_changed = True
             if not any_changed:
                 return MaskResult(pdf=data, counts=counts)

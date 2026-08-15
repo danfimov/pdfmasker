@@ -1,6 +1,11 @@
 # pdfmasker
 
-Mask sensitive text in PDFs.
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/pdfmasker?style=for-the-badge)](https://pypi.org/project/pdfmasker/)
+[![PyPI](https://img.shields.io/pypi/v/pdfmasker?style=for-the-badge)](https://pypi.org/project/pdfmasker/)
+[![PyPI - Downloads](https://img.shields.io/pypi/dm/pdfmasker?style=for-the-badge)](https://pypistats.org/packages/pdfmasker)
+[![CodSpeed Badge](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json&style=for-the-badge)](https://codspeed.io/danfimov/pdfmasker?utm_source=badge)
+
+With this library you can mask sensitive text in PDFs or basically change any text in your PDF files.
 
 ## Usage
 
@@ -21,8 +26,6 @@ each target's length):
 ```python
 mask_pdf(pdf_bytes, patterns=["Jane Doe"], mask_with="[REDACTED]")
 ```
-
-Errors raise `pdfmasker.MaskError`.
 
 ## Masking backends
 
