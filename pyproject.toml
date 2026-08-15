@@ -1,6 +1,6 @@
 [project]
 name = "pdfmasker"
-description = "Mask sensitive text in PDFs, in-process (no service round-trip)."
+description = "Mask sensitive text in PDFs."
 readme = "README.md"
 requires-python = ">=3.12"
 keywords = ["pdf", "masking", "redaction", "pii"]

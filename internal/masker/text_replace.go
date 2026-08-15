@@ -1,7 +1,6 @@
 package masker
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -10,9 +9,10 @@ import (
 	"strings"
 	"unicode/utf16"
 
+	cs "github.com/benoitkugler/pdf/contentstream"
 	"github.com/benoitkugler/pdf/fonts/cmaps"
 	benoitModel "github.com/benoitkugler/pdf/model"
-	tokenizer "github.com/benoitkugler/pstokenizer"
+	"github.com/benoitkugler/pdf/reader/parser"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	pdfcpuModel "github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
@@ -71,11 +71,16 @@ func ReplaceText(opts ReplaceOptions) (int, error) {
 }
 
 // replacement pairs a search string with the value it should be masked with.
-// A batch of replacements is applied to each content stream in a single decode/
-// tokenize/encode pass, instead of re-parsing every stream once per target.
+// A batch of replacements is applied to each content stream in a single
+// parse/mask/serialize pass, instead of re-parsing every stream once per target.
+//
+// When maskChar is non-zero the match is replaced by that rune repeated to the
+// matched length (the default masking mode, which preserves layout); otherwise the
+// literal replace string is used (the explicit find/replace mode).
 type replacement struct {
-	search  string
-	replace string
+	search   string
+	replace  string
+	maskChar rune
 }
 
 // replaceTextInContext applies all reps to every page. counts must be the same
@@ -99,8 +104,9 @@ func replaceTextInContext(ctx *pdfcpuModel.Context, cache *fontCache, reps []rep
 		if err != nil {
 			return totalReplacements, fmt.Errorf("page %d: load fonts: %w", page, err)
 		}
+		glyphFonts := toGlyphFonts(ctx, fonts)
 
-		replaced, err := replaceInObject(ctx, contentObj, fonts, reps, counts)
+		replaced, err := replaceInObject(ctx, contentObj, glyphFonts, reps, counts)
 		if err != nil {
 			if stopOnErrors {
 				return totalReplacements, fmt.Errorf("page %d: %w", page, err)
@@ -130,7 +136,7 @@ func (o ReplaceOptions) validate() error {
 	return nil
 }
 
-func replaceInObject(ctx *pdfcpuModel.Context, obj types.Object, fonts fontMap, reps []replacement, counts []int) (int, error) {
+func replaceInObject(ctx *pdfcpuModel.Context, obj types.Object, fonts map[string]*glyphFont, reps []replacement, counts []int) (int, error) {
 	switch o := obj.(type) {
 	case types.IndirectRef:
 		return replaceInIndirectObject(ctx, o, fonts, reps, counts)
@@ -145,7 +151,7 @@ func replaceInObject(ctx *pdfcpuModel.Context, obj types.Object, fonts fontMap, 
 	}
 }
 
-func replaceInIndirectObject(ctx *pdfcpuModel.Context, ref types.IndirectRef, fonts fontMap, reps []replacement, counts []int) (int, error) {
+func replaceInIndirectObject(ctx *pdfcpuModel.Context, ref types.IndirectRef, fonts map[string]*glyphFont, reps []replacement, counts []int) (int, error) {
 	entry, found := ctx.FindTableEntry(ref.ObjectNumber.Value(), ref.GenerationNumber.Value())
 	if !found || entry == nil || entry.Object == nil {
 		return 0, nil
@@ -174,7 +180,7 @@ func replaceInIndirectObject(ctx *pdfcpuModel.Context, ref types.IndirectRef, fo
 	}
 }
 
-func replaceInArray(ctx *pdfcpuModel.Context, arr types.Array, fonts fontMap, reps []replacement, counts []int) (int, error) {
+func replaceInArray(ctx *pdfcpuModel.Context, arr types.Array, fonts map[string]*glyphFont, reps []replacement, counts []int) (int, error) {
 	total := 0
 	for idx, item := range arr {
 		switch v := item.(type) {
@@ -205,7 +211,7 @@ func replaceInArray(ctx *pdfcpuModel.Context, arr types.Array, fonts fontMap, re
 	return total, nil
 }
 
-func replaceInStreamDict(ctx *pdfcpuModel.Context, sd *types.StreamDict, fonts fontMap, reps []replacement, counts []int) (int, error) {
+func replaceInStreamDict(ctx *pdfcpuModel.Context, sd *types.StreamDict, fonts map[string]*glyphFont, reps []replacement, counts []int) (int, error) {
 	if sd == nil {
 		return 0, nil
 	}
@@ -213,30 +219,28 @@ func replaceInStreamDict(ctx *pdfcpuModel.Context, sd *types.StreamDict, fonts f
 		return 0, fmt.Errorf("decode stream: %w", err)
 	}
 
-	tokens, err := tokenizer.Tokenize(sd.Content)
+	// ParseContent understands inline images (BI ... ID <binary> EI) and skips
+	// their binary payload, so text after an inline image is parsed correctly —
+	// the raw PostScript tokenizer used to choke on the binary and silently drop
+	// every operator that followed.
+	ops, err := parser.ParseContent(sd.Content, nil)
 	if err != nil {
-		return 0, fmt.Errorf("tokenize stream: %w", err)
+		return 0, fmt.Errorf("parse content stream: %w", err)
 	}
 
-	// Apply every target to the same token slice. Each pattern mutates the tokens
-	// in place, so later patterns see the already-masked text — identical semantics
-	// to the previous "one full pass per target" approach, but the stream is
-	// decoded, tokenized and (re-)encoded only once instead of once per target.
-	total := 0
-	for i := range reps {
-		n, err := applyReplacement(ctx, tokens, fonts, reps[i].search, reps[i].replace)
-		if err != nil {
-			return total, err
-		}
-		counts[i] += n
-		total += n
-	}
-	if total == 0 {
+	countMap := make(map[string]int, len(reps))
+	if !maskOperations(ops, fonts, reps, countMap) {
 		return 0, nil
 	}
 
-	newContent := serializeTokens(tokens)
-	sd.Content = newContent
+	total := 0
+	for i := range reps {
+		n := countMap[reps[i].search]
+		counts[i] += n
+		total += n
+	}
+
+	sd.Content = cs.WriteOperations(ops...)
 	sd.Raw = nil
 
 	if err := sd.Encode(); err != nil {
@@ -246,323 +250,19 @@ func replaceInStreamDict(ctx *pdfcpuModel.Context, sd *types.StreamDict, fonts f
 	return total, nil
 }
 
-func applyReplacement(ctx *pdfcpuModel.Context, tokens []tokenizer.Token, fonts fontMap, search, replace string) (int, error) {
-	if len(tokens) == 0 {
-		return 0, nil
-	}
-
-	// First try: use text reconstruction to handle character-by-character PDFs
-	total, err := applyReplacementWithReconstruction(ctx, tokens, fonts, search, replace)
-	if err == nil && total > 0 {
-		return total, nil
-	}
-
-	// Fallback to original token-by-token approach
-	var currentFont *fontResource
-
-	for i := 0; i < len(tokens); i++ {
-		tok := tokens[i]
-		if tok.Kind != tokenizer.Other {
+// toGlyphFonts resolves each collected font's ToUnicode CMap (best effort) and
+// projects it onto the engine-agnostic glyphFont used by the masking core. A font
+// without a ToUnicode ends up with a nil mapping, i.e. "raw bytes".
+func toGlyphFonts(ctx *pdfcpuModel.Context, fonts fontMap) map[string]*glyphFont {
+	out := make(map[string]*glyphFont, len(fonts))
+	for name, fr := range fonts {
+		if fr == nil {
 			continue
 		}
-
-		op := string(tok.Value)
-		switch op {
-		case "Tf":
-			if i >= 2 {
-				if tokens[i-2].Kind == tokenizer.Name {
-					fontName := "/" + string(tokens[i-2].Value)
-					currentFont = fonts[fontName]
-				}
-			}
-
-		case "Tj", "'", "\"":
-			if i == 0 || currentFont == nil {
-				continue
-			}
-			prev := &tokens[i-1]
-			if prev.Kind == tokenizer.String || prev.Kind == tokenizer.StringHex {
-				cnt, err := replaceInTextToken(ctx, prev, currentFont, search, replace)
-				if err != nil {
-					return total, err
-				}
-				total += cnt
-			}
-
-		case "TJ":
-			cnt, err := processArrayForTJ(ctx, tokens, i, currentFont, search, replace)
-			if err != nil {
-				return total, err
-			}
-			total += cnt
-		}
+		_ = fr.ensureMapping(ctx)
+		out[name] = &glyphFont{mapping: fr.mapping, isCID: fr.isCIDFont}
 	}
-
-	return total, nil
-}
-
-// applyReplacementWithReconstruction handles PDFs where text is split character-by-character
-func applyReplacementWithReconstruction(ctx *pdfcpuModel.Context, tokens []tokenizer.Token, fonts fontMap, search, replace string) (int, error) {
-	if len(tokens) == 0 {
-		return 0, nil
-	}
-
-	// Build segments of consecutive text operations
-	type textSegment struct {
-		font    *fontResource
-		indices []int // indices into the tokens array
-	}
-
-	var segments []textSegment
-	var currentFont *fontResource
-	var currentSegment *textSegment
-
-	for i := 0; i < len(tokens); i++ {
-		tok := &tokens[i]
-		if tok.Kind != tokenizer.Other {
-			continue
-		}
-
-		op := string(tok.Value)
-		switch op {
-		case "Tf":
-			if i >= 2 {
-				if tokens[i-2].Kind == tokenizer.Name {
-					fontName := "/" + string(tokens[i-2].Value)
-					currentFont = fonts[fontName]
-				}
-			}
-			// Font change ends current segment
-			if currentSegment != nil && len(currentSegment.indices) > 0 {
-				segments = append(segments, *currentSegment)
-				currentSegment = nil
-			}
-
-		case "Tj", "'", "\"":
-			if i == 0 || currentFont == nil {
-				continue
-			}
-			prevIdx := i - 1
-			if tokens[prevIdx].Kind == tokenizer.String || tokens[prevIdx].Kind == tokenizer.StringHex {
-				if currentSegment == nil {
-					currentSegment = &textSegment{
-						indices: make([]int, 0),
-						font:    currentFont,
-					}
-				}
-				currentSegment.indices = append(currentSegment.indices, prevIdx)
-			}
-
-		case "TJ":
-			// TJ operator: extract strings from the array
-			if currentFont == nil {
-				continue
-			}
-
-			// Find the array before this TJ operator
-			if i > 0 && tokens[i-1].Kind == tokenizer.EndArray {
-				end := i - 1
-				start := findTJArrayStart(tokens, end)
-
-				if start >= 0 {
-					// Collect string tokens from the array
-					if currentSegment == nil {
-						currentSegment = &textSegment{
-							indices: make([]int, 0),
-							font:    currentFont,
-						}
-					}
-					for idx := start + 1; idx < end; idx++ {
-						if tokens[idx].Kind == tokenizer.String || tokens[idx].Kind == tokenizer.StringHex {
-							currentSegment.indices = append(currentSegment.indices, idx)
-						}
-					}
-				}
-			}
-
-			// TJ ends the current segment
-			if currentSegment != nil && len(currentSegment.indices) > 0 {
-				segments = append(segments, *currentSegment)
-				currentSegment = nil
-			}
-
-		case "BT", "ET":
-			// Text block boundaries
-			if currentSegment != nil && len(currentSegment.indices) > 0 {
-				segments = append(segments, *currentSegment)
-				currentSegment = nil
-			}
-		}
-	}
-
-	// Add final segment
-	if currentSegment != nil && len(currentSegment.indices) > 0 {
-		segments = append(segments, *currentSegment)
-	}
-
-	// Now process each segment
-	total := 0
-	for _, seg := range segments {
-		// Reconstruct text from segment
-		var reconstructed strings.Builder
-		tokenInfos := make([]decodedText, len(seg.indices))
-
-		for idx, tokenIdx := range seg.indices {
-			info, err := decodeText(ctx, tokens[tokenIdx].Value, seg.font)
-			if err != nil {
-				continue
-			}
-			tokenInfos[idx] = info
-			reconstructed.WriteString(info.text)
-		}
-
-		fullText := reconstructed.String()
-		if !containsFold(fullText, search) {
-			continue
-		}
-
-		// Found a match! Now we need to replace it across the tokens
-		cnt, err := replaceAcrossTokensInPlace(ctx, tokens, seg.indices, tokenInfos, seg.font, fullText, search, replace)
-		if err != nil {
-			return total, err
-		}
-		total += cnt
-	}
-
-	return total, nil
-}
-
-// replaceAcrossTokensInPlace replaces search string that spans across multiple character tokens
-func replaceAcrossTokensInPlace(ctx *pdfcpuModel.Context, tokens []tokenizer.Token, indices []int, infos []decodedText, font *fontResource, fullText, search, replace string) (int, error) {
-	// Find all occurrences of search in fullText (case-insensitive)
-	count := countFold(fullText, search)
-	if count == 0 {
-		return 0, nil
-	}
-
-	// Build new full text with replacements (case-insensitive)
-	newFullText := replaceAllFold(fullText, search, replace)
-
-	// Now redistribute the new text across the tokens
-	// Strategy: only re-encode tokens where the character actually changed
-	// This preserves original CIDs for unchanged characters (avoiding reverse mapping issues)
-	newTextRunes := []rune(newFullText)
-	origTextRunes := []rune(fullText)
-	runeIdx := 0
-
-	for i, idx := range indices {
-		if i >= len(infos) {
-			break
-		}
-
-		// Get the original character count for this token
-		origCharCount := len([]rune(infos[i].text))
-		origByteCount := len(tokens[idx].Value)
-
-		// If this token originally had no decoded characters, preserve original bytes
-		// (unmapped CIDs should not be replaced with fallback characters)
-		if origCharCount == 0 {
-			continue
-		}
-
-		// Get the range of characters for this token
-		endIdx := runeIdx + origCharCount
-		if endIdx > len(newTextRunes) {
-			endIdx = len(newTextRunes)
-		}
-		if endIdx > len(origTextRunes) {
-			endIdx = len(origTextRunes)
-		}
-
-		// Check if characters actually changed
-		origSlice := origTextRunes[runeIdx:endIdx]
-		newSlice := newTextRunes[runeIdx:endIdx]
-		changed := false
-		if len(origSlice) != len(newSlice) {
-			changed = true
-		} else {
-			for j := 0; j < len(origSlice); j++ {
-				if origSlice[j] != newSlice[j] {
-					changed = true
-					break
-				}
-			}
-		}
-
-		runeIdx = endIdx
-
-		// Only re-encode if characters changed
-		if !changed {
-			continue
-		}
-
-		tokenText := string(newSlice)
-
-		// Encode the text, preserving original byte structure for CID fonts
-		var newBytes []byte
-		var err error
-
-		switch {
-		case font != nil && font.mapping != nil && font.isCIDFont:
-			// For CID fonts, maintain the original byte count (slot count)
-			newBytes = encodeWithMappingSlots(tokenText, font.mapping, origByteCount)
-		case font != nil && font.mapping != nil:
-			newBytes = encodeWithMapping(tokenText, font.mapping, font.isCIDFont)
-		default:
-			newBytes, err = encodeText(font, tokenText, infos[i])
-			if err != nil {
-				continue
-			}
-		}
-
-		tokens[idx].Kind = tokenizer.StringHex
-		tokens[idx].Value = newBytes
-	}
-
-	return count, nil
-}
-
-// findTJArrayStart returns the index of the array-open token ("[") matching the
-// array-close token at endIdx, scanning backward and honoring nested arrays.
-// endIdx must reference an EndArray token. Returns -1 if no matching open is found.
-func findTJArrayStart(tokens []tokenizer.Token, endIdx int) int {
-	depth := 0
-	for j := endIdx; j >= 0; j-- {
-		switch tokens[j].Kind {
-		case tokenizer.EndArray:
-			depth++
-		case tokenizer.StartArray:
-			depth--
-			if depth == 0 {
-				return j
-			}
-		}
-	}
-	return -1
-}
-
-func processArrayForTJ(ctx *pdfcpuModel.Context, tokens []tokenizer.Token, opIndex int, font *fontResource, search, replace string) (int, error) {
-	if opIndex == 0 || tokens[opIndex-1].Kind != tokenizer.EndArray {
-		return 0, nil
-	}
-
-	end := opIndex - 1
-	start := findTJArrayStart(tokens, end)
-	if start < 0 {
-		return 0, nil
-	}
-
-	total := 0
-	for idx := start + 1; idx < end; idx++ {
-		if tokens[idx].Kind == tokenizer.String || tokens[idx].Kind == tokenizer.StringHex {
-			cnt, err := replaceInTextToken(ctx, &tokens[idx], font, search, replace)
-			if err != nil {
-				return total, err
-			}
-			total += cnt
-		}
-	}
-	return total, nil
+	return out
 }
 
 type textEncoding int
@@ -572,64 +272,6 @@ const (
 	encodingUTF16BE
 	encodingUTF16LE
 )
-
-type decodedText struct {
-	text     string
-	encoding textEncoding
-	viaFont  bool
-}
-
-func replaceInTextToken(ctx *pdfcpuModel.Context, tok *tokenizer.Token, font *fontResource, search, replace string) (int, error) {
-	info, err := decodeText(ctx, tok.Value, font)
-	if err != nil {
-		return 0, err
-	}
-	if info.text == "" || !containsFold(info.text, search) {
-		return 0, nil
-	}
-
-	count := countFold(info.text, search)
-	if count == 0 {
-		return 0, nil
-	}
-
-	updated := replaceAllFold(info.text, search, replace)
-	if updated == info.text {
-		return 0, nil
-	}
-
-	newBytes, err := encodeText(font, updated, info)
-	if err != nil {
-		return 0, err
-	}
-
-	tok.Kind = tokenizer.StringHex
-	tok.Value = newBytes
-
-	return count, nil
-}
-
-func decodeText(ctx *pdfcpuModel.Context, data []byte, font *fontResource) (decodedText, error) {
-	if font != nil {
-		if err := font.ensureMapping(ctx); err != nil {
-			return decodedText{}, err
-		}
-		if font.mapping != nil {
-			txt := decodeWithMapping(data, font.mapping, font.isCIDFont)
-			return decodedText{text: txt, viaFont: true}, nil
-		}
-	}
-
-	text, enc := decodePDFText(data)
-	return decodedText{text: text, encoding: enc}, nil
-}
-
-func encodeText(font *fontResource, text string, info decodedText) ([]byte, error) {
-	if info.viaFont && font != nil && font.mapping != nil {
-		return encodeWithMapping(text, font.mapping, font.isCIDFont), nil
-	}
-	return encodePDFText(text, info.encoding), nil
-}
 
 func decodePDFText(data []byte) (string, textEncoding) {
 	if len(data) >= 2 {
@@ -682,60 +324,6 @@ func utf16BytesToString(data []byte, order binary.ByteOrder) string {
 		codeUnits[i/2] = order.Uint16(data[i : i+2])
 	}
 	return string(utf16.Decode(codeUnits))
-}
-
-func serializeTokens(tokens []tokenizer.Token) []byte {
-	// Estimate output size to avoid repeated buffer growth. Hex strings roughly
-	// double their value length, so add a per-token allowance on top.
-	size := 0
-	for i := range tokens {
-		size += len(tokens[i].Value)*2 + 2
-	}
-	var buf bytes.Buffer
-	buf.Grow(size)
-	for _, tok := range tokens {
-		writeToken(&buf, tok)
-	}
-	return buf.Bytes()
-}
-
-func writeToken(buf *bytes.Buffer, tok tokenizer.Token) {
-	switch tok.Kind {
-	case tokenizer.Name:
-		buf.WriteByte('/')
-		buf.Write(tok.Value)
-		buf.WriteByte(' ')
-	case tokenizer.String, tokenizer.StringHex:
-		writeHexString(buf, tok.Value)
-	case tokenizer.Integer, tokenizer.Float:
-		buf.Write(tok.Value)
-		buf.WriteByte(' ')
-	case tokenizer.Other:
-		buf.Write(tok.Value)
-		buf.WriteByte('\n')
-	case tokenizer.StartArray:
-		buf.WriteByte('[')
-	case tokenizer.EndArray:
-		buf.WriteByte(']')
-		buf.WriteByte(' ')
-	case tokenizer.StartDic:
-		buf.WriteString("<<")
-	case tokenizer.EndDic:
-		buf.WriteString(">>")
-		buf.WriteByte(' ')
-	}
-}
-
-const hexUpper = "0123456789ABCDEF"
-
-func writeHexString(buf *bytes.Buffer, data []byte) {
-	buf.WriteByte('<')
-	for _, b := range data {
-		buf.WriteByte(hexUpper[b>>4])
-		buf.WriteByte(hexUpper[b&0x0F])
-	}
-	buf.WriteByte('>')
-	buf.WriteByte(' ')
 }
 
 // --- font handling helpers ---

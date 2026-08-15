@@ -15,7 +15,7 @@ import (
 func TestMaskStream(t *testing.T) {
 	t.Parallel()
 
-	sourcePath := filepath.Join("..", "..", "tests", "fixtures", "test_paystub.pdf")
+	sourcePath := filepath.Join("..", "..", "tests", "fixtures", "paystubs", "simple_paystub.pdf")
 	f, err := os.Open(sourcePath)
 	require.NoError(t, err)
 	t.Cleanup(func() {

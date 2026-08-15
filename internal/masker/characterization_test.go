@@ -14,7 +14,9 @@ import (
 
 func fixture(t *testing.T) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "test_paystub.pdf"))
+	// simple_paystub.pdf routes through the fallback (non-object-stream) engine and
+	// carries the employee name "Lorraine Freddie".
+	data, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "paystubs", "simple_paystub.pdf"))
 	require.NoError(t, err)
 	return data
 }
@@ -95,22 +97,23 @@ func TestChar_OutputReusable(t *testing.T) {
 	require.NoError(t, err, "masked PDF must remain parseable")
 }
 
-// Hybrid path (object-stream PDF, real ADP paystub): name parts are redacted and
-// the operation is idempotent. Guards the ctx-reuse dedup refactor.
+// Hybrid path (object-stream PDF, ADP paystub): name parts are redacted and the
+// operation is idempotent. Guards the ctx-reuse dedup refactor.
 func TestChar_HybridADP(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "test_paystub_adp_hybrid.pdf"))
+	// adp_paystub_hermion_granger.pdf routes through the hybrid (object-stream) engine.
+	data, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "paystubs", "adp_paystub_hermion_granger.pdf"))
 	require.NoError(t, err)
 
-	res := mask(t, data, "ANTWANE", "JEFFERSON-TOLBERT")
-	require.Positive(t, res.Applied["ANTWANE"], "first name must be found in hybrid PDF")
-	require.Positive(t, res.Applied["JEFFERSON-TOLBERT"], "last name must be found in hybrid PDF")
+	res := mask(t, data, "HERMIONE", "GRANGER")
+	require.Positive(t, res.Applied["HERMIONE"], "first name must be found in hybrid PDF")
+	require.Positive(t, res.Applied["GRANGER"], "last name must be found in hybrid PDF")
 
 	out := drain(t, res)
 	require.Greater(t, len(out), 0)
 
-	res2 := mask(t, out, "ANTWANE", "JEFFERSON-TOLBERT")
-	require.Zero(t, res2.Applied["ANTWANE"], "already masked")
-	require.Zero(t, res2.Applied["JEFFERSON-TOLBERT"], "already masked")
+	res2 := mask(t, out, "HERMIONE", "GRANGER")
+	require.Zero(t, res2.Applied["HERMIONE"], "already masked")
+	require.Zero(t, res2.Applied["GRANGER"], "already masked")
 }
 
 // A target that does not occur yields zero and does not corrupt output.
