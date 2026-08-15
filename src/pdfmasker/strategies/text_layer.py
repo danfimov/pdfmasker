@@ -10,6 +10,10 @@ from pdfmasker.strategies.base import MaskResult, MaskStrategy
 class TextLayerStrategy(MaskStrategy):
     """Mask text present in the PDF's text layer via the masker binary."""
 
+    def __init__(self, timeout: float | None = 30.0) -> None:
+        """Initialize new masking strategy."""
+        self._timeout = timeout
+
     def applies_to(self, data: bytes) -> bool:
         """Return True for anything that looks like a PDF; scan detection routes away upstream."""
         return data.startswith(b"%PDF")
@@ -39,6 +43,7 @@ class TextLayerStrategy(MaskStrategy):
                 input=data,
                 capture_output=True,
                 check=False,
+                timeout=self._timeout,
             )
         except OSError as exc:
             error_message = "Failed to run masking binary"
