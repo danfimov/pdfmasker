@@ -38,7 +38,7 @@ class Replacement:
     replace: str | None
 
 
-@dataclass
+@dataclass(slots=True)
 class _Chunk:
     """One show-text piece within a segment, tracked back to where its bytes live."""
 
