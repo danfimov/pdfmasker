@@ -48,6 +48,19 @@ The single request flows through these layers, each in its own file:
 3. `masker.MaskStream` → `MaskStreamWithFallback` (`stream_mask.go`, `hybrid_writer.go`) picks one of **two engines**
    based on the PDF's structure.
 
+### Alternative in-process backend (pikepdf)
+
+`PikepdfTextLayerStrategy` (`strategies/pikepdf/`) is a second, independent implementation that does the same masking
+entirely in Python via pikepdf/qpdf — no subprocess, no Go. It is **opt-in**: the default `Masker` still uses
+`TextLayerStrategy`, and callers select pikepdf explicitly with
+`Masker(strategies=[PikepdfTextLayerStrategy()])`. pikepdf is an optional dependency (`pdfmasker[pikepdf]`); importing
+the subpackage without it raises `MissingDependencyError`. qpdf round-trips object streams natively, so this backend
+needs no structure-based engine split. It reconstructs the same per-font segments and does the same
+whitespace-flexible matching (a space in a target matches a real space glyph or an operator boundary), so a full name
+split across `Tj`/`TJ` operators masks identically to the Go path. The two backends share no code and are kept in sync
+only through the tests in `tests/` (Go path) and `tests/pikepdf/` (Python path) — the fixtures in
+`tests/fixtures/paystubs/` carry a `<name>.keys.json` sidecar of sensitive strings that both benchmark suites mask.
+
 ### The two Go masking engines (the crux of this codebase)
 
 `MaskStreamWithFallback` parses the PDF once with pdfcpu, then branches on `hasObjectStreams(ctx)`:

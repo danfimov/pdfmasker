@@ -8,3 +8,7 @@ class MaskError(PdfMaskerError):
 
 class BinaryNotFoundError(PdfMaskerError):
     """The bundled masking binary could not be located."""
+
+
+class MissingDependencyError(PdfMaskerError):
+    """An optional dependency required by the chosen strategy is not installed."""

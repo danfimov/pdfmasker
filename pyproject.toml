@@ -7,6 +7,11 @@ keywords = ["pdf", "masking", "redaction", "pii"]
 dynamic = ["version"]
 dependencies = []
 
+[project.optional-dependencies]
+pikepdf = [
+    "pikepdf>=10.11.0",
+]
+
 [dependency-groups]
 dev = [
     {include-group = "pre-commit"},
@@ -37,18 +42,12 @@ build-backend = "hatchling.build"
 [tool.hatch.version]
 path = "src/pdfmasker/__init__.py"
 
-# --- wheel: ships the Python package plus the compiled Go binary ---
 [tool.hatch.build.targets.wheel]
 packages = ["src/pdfmasker"]
-# The binary is produced by the custom build hook and lives under a VCS-ignored
-# directory, so it must be declared as an artifact to be packaged.
 artifacts = ["src/pdfmasker/_bin/*"]
 
-# Enables hatch_build.py::CustomBuildHook for the wheel: it compiles the Go
-# binary and marks the wheel platform-specific (py3-none-<platform>).
 [tool.hatch.build.targets.wheel.hooks.custom]
 
-# --- sdist: ships the Go sources so a wheel can be rebuilt from scratch ---
 [tool.hatch.build.targets.sdist]
 include = [
   "src/pdfmasker",
@@ -77,9 +76,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = [
+"tests/**" = [
     "D",
     "ANN",
     "PLR2004",
     "S101",
+    "INP001",  # test directories are not import packages
 ]
