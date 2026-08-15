@@ -27,7 +27,7 @@ def binary_path() -> str:
 
     try:
         with resources.as_file(
-            resources.files("pdfmasker").joinpath("_bin", _BINARY_NAME),
+            resources.files("pdfmasker").joinpath("_bin").joinpath(_BINARY_NAME),
         ) as path:
             if path.is_file():
                 return str(path)

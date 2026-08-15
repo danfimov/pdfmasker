@@ -50,7 +50,9 @@ class _Chunk:
     element_index: int | None
 
 
-def iter_content_targets(pdf: pikepdf.Pdf) -> Iterator[tuple[str, pikepdf.Object, pikepdf.Object | None]]:
+def iter_content_targets(
+    pdf: pikepdf.Pdf,
+) -> Iterator[tuple[pikepdf.Object | pikepdf.Page, pikepdf.Object | None]]:
     """Yield each page and Form XObject together with its resources.
 
     Forms inherit the page resources when they declare none, and a form shared
@@ -59,17 +61,17 @@ def iter_content_targets(pdf: pikepdf.Pdf) -> Iterator[tuple[str, pikepdf.Object
     seen: set[tuple[int, int]] = set()
     for page in pdf.pages:
         resources = page.get("/Resources")
-        yield "page", page, resources
+        yield page, resources
         yield from _iter_forms(resources, seen)
 
 
 def _iter_forms(
     resources: pikepdf.Object | None,
     seen: set[tuple[int, int]],
-) -> Iterator[tuple[str, pikepdf.Object, pikepdf.Object | None]]:
+) -> Iterator[tuple[pikepdf.Object | pikepdf.Page, pikepdf.Object | None]]:
     if resources is None or "/XObject" not in resources:
         return
-    for xobject in resources["/XObject"].values():
+    for _, xobject in resources["/XObject"].items():  # noqa: PERF102  # pikepdf's stub types items() but not values()
         if str(xobject.get("/Subtype")) != "/Form":
             continue
         key = xobject.objgen
@@ -77,12 +79,12 @@ def _iter_forms(
             continue
         seen.add(key)
         own_resources = xobject.get("/Resources") or resources
-        yield "form", xobject, own_resources
+        yield xobject, own_resources
         yield from _iter_forms(own_resources, seen)
 
 
 def process(
-    container: pikepdf.Object,
+    container: pikepdf.Object | pikepdf.Page,
     fonts: Mapping[str, Font],
     replacements: Sequence[Replacement],
 ) -> tuple[list, dict[str, int], bool]:
@@ -224,7 +226,7 @@ def _rewrite_chunk(
             if rep.mask_char is not None:
                 out.append(rep.mask_char)
             elif position == match_start:
-                out.append(rep.replace)
+                out.append(rep.replace or "")
         position += 1
     return "".join(out), changed, match_cursor
 
@@ -246,16 +248,17 @@ def _rebuild(instructions: Sequence, changes: Mapping[tuple[int, int | None], by
         else:
             elements = list(operands[-1])
             for element_index, data in edits.items():
-                elements[element_index] = pikepdf.String(data)
+                if element_index is not None:
+                    elements[element_index] = pikepdf.String(data)
             operands[-1] = pikepdf.Array(elements)
         result[instr_index] = ContentStreamInstruction(operands, instruction.operator)
     return result
 
 
-def write_back(pdf: pikepdf.Pdf, kind: str, container: pikepdf.Object, instructions: list) -> None:
+def write_back(pdf: pikepdf.Pdf, container: pikepdf.Object | pikepdf.Page, instructions: list) -> None:
     """Store rewritten instructions back onto a page or Form XObject."""
     new_bytes = pikepdf.unparse_content_stream(instructions)
-    if kind == "page":
+    if isinstance(container, pikepdf.Page):
         container.Contents = pdf.make_stream(new_bytes)
     else:
         container.write(new_bytes)
