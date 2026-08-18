@@ -1,7 +1,6 @@
 fail_fast: false
 default_language_version:
   python: python3.12
-  golang: go1.25
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.2

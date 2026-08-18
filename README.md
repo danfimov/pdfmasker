@@ -16,42 +16,42 @@ pdf_bytes = open("paystub.pdf", "rb").read()
 
 result = mask_pdf(pdf_bytes, patterns=["Jane Doe", "123-45-6789"])
 
-result.pdf       # bytes — the masked PDF
-result.counts    # {"Jane Doe": 2, "123-45-6789": 1}
+result.document_content   # bytes — the masked PDF
+result.entries            # per-target log: target, replacement, kind, count
 ```
 
-`mask_with` controls the replacement string; omit it (or pass `None`) to use the default mask (a run of `X` matching
-each target's length):
+By default each match is replaced in place with a run of `X`. An `editor` chooses how matches are rendered — a
+constant string, or consistent pseudonyms:
 
 ```python
-mask_pdf(pdf_bytes, patterns=["Jane Doe"], mask_with="[REDACTED]")
+from pdfmasker import FixedStringEditor, mask_pdf
+
+mask_pdf(pdf_bytes, patterns=["Jane Doe"], editor=FixedStringEditor("[REDACTED]"))
 ```
 
-## Masking backends
+## Pluggable parts
 
-Text replacement is available through two independent implementations. `mask_pdf` uses the first one by default; the
-second is opt-in.
+Masking is composed from four pluggable parts:
 
-- **Bundled binary (default).** `mask_pdf` and `Masker()` drive a compiled Go engine over a subprocess. It works out of
-  the box with the installed wheel and needs no extra dependencies.
-- **In-process (pikepdf).** `PikepdfTextLayerStrategy` edits the PDF's content streams directly in Python, avoiding the
-  per-call subprocess overhead. It is an optional dependency:
+- **Backend** — how the PDF is read and rewritten. The default in-process `PikepdfBackend` edits content streams
+  directly in Python.
+- **Detector** (optional) — what to mask. Pass literal `patterns`, or configure detectors such as `RegexDetector`
+  to discover targets from the document text.
+- **Editor** — how each match is rendered: `FixedCharEditor` (default `X`), `FixedStringEditor`, `PseudonymizeEditor`,
+  or `KeyedPseudonymizeEditor`.
+- **SubstitutionStore** — keeps pseudonyms consistent and collision-free. Share one across documents so the same
+  value always masks to the same replacement.
 
-  ```bash
-  pip install pdfmasker[pikepdf]
-  ```
+```python
+from pdfmasker import InMemorySubstitutionStore, Masker, PseudonymizeEditor, RegexDetector
 
-  ```python
-  from pdfmasker import Masker
-  from pdfmasker.strategies.pikepdf import PikepdfTextLayerStrategy
-
-  masker = Masker(strategies=[PikepdfTextLayerStrategy()])
-  result = masker.mask(pdf_bytes, patterns=["Jane Doe"])
-  ```
-
-Both accept the same patterns and `mask_with`, and return the same `MaskResult`. The bundled binary is the more
-battle-tested path; the pikepdf backend trades that maturity for lower latency and a pure-Python dependency. Without the
-`pikepdf` extra installed, using the in-process strategy raises `pdfmasker.MissingDependencyError`.
+store = InMemorySubstitutionStore()
+masker = Masker(
+    detectors=[RegexDetector(r"\d{3}-\d{2}-\d{4}", kind="ssn")],
+    editor=PseudonymizeEditor(store),
+)
+result = masker.mask(pdf_bytes, patterns=["Jane Doe"])
+```
 
 ## Contributing
 

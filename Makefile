@@ -1,7 +1,5 @@
 .DEFAULT_GOAL := help
 
-BINARY := src/pdfmasker/_bin/masker
-
 .DEFAULT:
 	@echo "No such command (or you passed two or more targets to make). List of possible commands: make help"
 	@exit 2
@@ -19,36 +17,23 @@ init: ## Create the local virtualenv and install the git hooks
 	@uv venv -p 3.12
 	@uv run prek install
 
-.PHONY: binary
-binary: ## Build the Go binary into the package for local iteration
-	@go build -trimpath -o $(BINARY) ./cmd/masker
-
 .PHONY: lint
-lint: ## Lint sources with ruff
+lint: ## Lint sources with ruff and audit the workflows with zizmor
 	@uv run ruff check .
 	@uv run zizmor .github/workflows
 
 .PHONY: format
-format: ## Auto-format Python (ruff) and Go (gofmt)
+format: ## Auto-format with ruff
 	@uv run ruff format .
-	@go fmt ./...
-
-.PHONY: test-go
-test-go: ## Run the Go engine tests (vet + race detector)
-	@go vet ./...
-	@go test ./internal/... -race
-
-.PHONY: test-py
-test-py: ## Run the Python end-to-end tests (recompiles the binary)
-	@uv run pytest
 
 .PHONY: test
-test: test-go test-py ## Run the full test suite (Go + Python)
+test: ## Run the test suite
+	@uv run pytest
 
 .PHONY: build
-build: ## Build the native platform wheel
+build: ## Build the wheel
 	@uv build --wheel
 
 .PHONY: clean
-clean: ## Remove build artifacts and the compiled binary
-	@rm -rf dist src/pdfmasker/_bin
+clean: ## Remove build artifacts
+	@rm -rf dist

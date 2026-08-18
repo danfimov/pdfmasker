@@ -5,8 +5,7 @@ from pathlib import Path
 import pytest
 
 from pdfmasker import Masker
-from pdfmasker.strategies.pikepdf import PikepdfTextLayerStrategy
-from pdfmasker.strategies.text_layer import TextLayerStrategy
+from pdfmasker.backends.pikepdf import PikepdfBackend
 
 
 @dataclass(frozen=True)
@@ -28,9 +27,4 @@ def files_for_test() -> dict[str, FileToMask]:
 
 @pytest.fixture(scope="session")
 def pikepdf_masker() -> Masker:
-    return Masker(strategies=[PikepdfTextLayerStrategy()])
-
-
-@pytest.fixture(scope="session")
-def text_layer_masker() -> Masker:
-    return Masker(strategies=[TextLayerStrategy()])
+    return Masker(backends=[PikepdfBackend()])
