@@ -48,6 +48,6 @@ jobs:
           version: "latest"
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --all-extras
       - name: Run tests
         run: uv run pytest --memray
