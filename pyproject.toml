@@ -25,17 +25,19 @@ classifiers = [
   "Typing :: Typed"
 ]
 dynamic = ["version"]
-dependencies = []
+dependencies = [
+    "pikepdf>=10.11.0",
+]
+
+[project.optional-dependencies]
+faker = [
+    "faker>=25.0.0",
+]
 
 [project.urls]
 Documentation = "https://github.com/danfimov/pdfmasker"
 Repository = "https://github.com/danfimov/pdfmasker"
 Changelog = "https://github.com/danfimov/pdfmasker/releases"
-
-[project.optional-dependencies]
-pikepdf = [
-    "pikepdf>=10.11.0",
-]
 
 [dependency-groups]
 dev = [
@@ -71,18 +73,10 @@ path = "src/pdfmasker/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pdfmasker"]
-artifacts = ["src/pdfmasker/_bin/*"]
-
-[tool.hatch.build.targets.wheel.hooks.custom]
 
 [tool.hatch.build.targets.sdist]
 include = [
   "src/pdfmasker",
-  "cmd",
-  "internal",
-  "go.mod",
-  "go.sum",
-  "hatch_build.py",
   "README.md",
   "LICENSE",
 ]
@@ -98,8 +92,11 @@ ignore = [
     "CPY",
     "D203",  # conflicting with D211
     "D213",  # conflicting with D212
+    "D413",
     "D100",
+    "D104",
     "COM812",
+    "A005",  # `abc`/`types` deliberately shadow stdlib module names in this package layout
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -109,4 +106,10 @@ ignore = [
     "PLR2004",
     "S101",
     "INP001",  # test directories are not import packages
+    "ARG",     # test doubles carry protocol-required but unused arguments
+    "EM",      # test doubles raise string literals directly for brevity
+]
+"examples/**" = [
+    "INP001",
+    "T201",
 ]

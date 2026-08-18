@@ -18,10 +18,6 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false  # release job: avoid cache poisoning of published artifacts
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           enable-cache: false
@@ -34,16 +30,10 @@ jobs:
           sed -i "s/^__version__ = .*/__version__ = \"${version}\"/" src/pdfmasker/__init__.py
           echo "Building pdfmasker ${version}"
 
-      - name: Build sdist and platform wheels
+      - name: Build sdist and wheel
         run: |
           set -euxo pipefail
-          uv build --sdist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
-            # Clean the binary dir first: the wheel's `_bin/*` artifact glob would
-            # otherwise fold a previous platform's binary into this wheel.
-            rm -rf src/pdfmasker/_bin
-            GOOS="${target%/*}" GOARCH="${target#*/}" uv build --wheel
-          done
+          uv build
           ls -l dist
 
       - name: Publish
